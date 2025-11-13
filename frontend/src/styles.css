@@ -1,0 +1,75 @@
+:root {
+  --brand-blue: #2f53ff;
+  --brand-blue-600: #2745d7;
+  --card-bg: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--text); }
+
+.app-shell { display: flex; min-height: 100vh; flex-direction: column; background: var(--brand-blue); }
+.app-main { flex: 1 1 auto; display: flex; align-items: stretch; justify-content: stretch; }
+
+/* Navbar */
+.nav {
+  width: 100%;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+}
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); }
+.brand-logo { width: 28px; height: 28px; border-radius: 50%; background: var(--brand-blue); display: inline-flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; }
+.nav-actions { display: inline-flex; gap: 10px; }
+.btn { appearance: none; border: 1px solid var(--border); background: #fff; color: var(--text); padding: 8px 14px; border-radius: 999px; cursor: pointer; font-weight: 600; }
+.btn.primary { background: var(--brand-blue); color: #fff; border-color: var(--brand-blue); }
+.btn.primary:hover { background: var(--brand-blue-600); }
+
+/* Footer */
+.footer { background: #f8fafc; border-top: 1px solid var(--border); padding: 14px 20px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
+.footer .left { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.footer .right { text-align: right; color: var(--muted); font-size: 14px; }
+
+/* Centered card layout for auth */
+.auth-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px 16px; }
+.card { width: 100%; max-width: 520px; background: var(--card-bg); border-radius: 14px; box-shadow: var(--shadow); padding: 28px; }
+.card h1 { text-align: center; margin: 0 0 18px; }
+.field { display: grid; gap: 6px; margin-bottom: 12px; }
+.field label { font-size: 14px; color: var(--muted); }
+.input { width: 100%; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; font-size: 16px; }
+.input:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(47,83,255,0.15); }
+.actions { margin-top: 14px; display: flex; gap: 10px; align-items: center; justify-content: center; }
+.muted { color: var(--muted); font-size: 14px; }
+.link { color: var(--brand-blue); text-decoration: none; font-weight: 600; }
+
+/* Chat layout */
+.chat-shell { display: grid; grid-template-columns: 280px 1fr; width: 100%; }
+.sidebar { background: #f8fafc; border-right: 1px solid var(--border); padding: 16px; }
+.sidebar h3 { margin-top: 0; }
+.sidebar .menu { display: grid; gap: 10px; margin-top: 8px; }
+.menu .item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #fff; border: 1px solid var(--border); cursor: pointer; }
+
+.chat-area { display: grid; grid-template-rows: 1fr auto; min-height: calc(100vh - 120px); }
+.chat-view { display: flex; flex-direction: column; gap: 12px; padding: 28px; overflow-y: auto; color: #fff; justify-content: center; align-items: center; text-align: center; }
+.chat-view .welcome { font-size: 22px; font-weight: 700; }
+
+.composer { background: #f8fafc; border-top: 1px solid var(--border); padding: 12px; }
+.composer-inner { display: grid; grid-template-columns: 1fr auto; gap: 10px; max-width: 900px; margin: 0 auto; }
+.composer .input { background: #fff; }
+
+/* Chat bubble */
+.bubble-row { display: flex; }
+.bubble { max-width: 70%; padding: 12px 14px; border-radius: 12px; background: #fff; box-shadow: var(--shadow); color: var(--text); }
+.bubble.user { margin-left: auto; background: #e8edff; }
+.bubble.bot { margin-right: auto; background: #fff; }
+
+@media (max-width: 840px) {
+  .chat-shell { grid-template-columns: 1fr; }
+  .sidebar { display: none; }
+}
+
