@@ -26,7 +26,7 @@ export default function LoginPage() {
 
   return (
     <div className="auth-wrap" role="main">
-      <form className="card" onSubmit={onSubmit}>
+      <form className="card auth-card" onSubmit={onSubmit}>
         <h1>Login</h1>
         <div className="field">
           <label htmlFor="email">Email</label>

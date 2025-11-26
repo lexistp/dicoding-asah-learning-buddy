@@ -30,7 +30,16 @@ async function jfetch(path, opts = {}) {
       ...authHeaders(),
     },
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    let text = await res.text();
+    try {
+      const data = JSON.parse(text);
+      text = data.detail || data.message || text;
+    } catch (_) {
+      // plain text
+    }
+    throw new Error(text);
+  }
   return res.json();
 }
 
@@ -55,10 +64,27 @@ export const Backend = {
   saveOnboarding(payload) {
     return jfetch("/onboarding", { method: "POST", body: JSON.stringify(payload) });
   },
+  onboardingProfile() {
+    return jfetch("/onboarding/last");
+  },
 
   // Assessment
   submitAssessment(payload) {
     return jfetch("/assessment/submit", { method: "POST", body: JSON.stringify(payload) });
+  },
+  assessmentLatest() {
+    return jfetch("/assessment/last");
+  },
+
+  // ML
+  recommendByOnboarding() {
+    return jfetch("/recommend/by_onboarding");
+  },
+  extractSkills(text) {
+    return jfetch("/ml/extract_skills", { method: "POST", body: JSON.stringify({ text }) });
+  },
+  recommendByQuery(query, limit = 6) {
+    return jfetch("/ml/recommend_by_query", { method: "POST", body: JSON.stringify({ query, limit }) });
   },
 
   // Conversations
@@ -75,4 +101,18 @@ export const Backend = {
     const data = await jfetch(`/conversations/${cid}/messages`, { method: "POST", body: JSON.stringify({ text }) });
     return data.reply;
   },
+  deleteConversation(cid) {
+    return jfetch(`/conversations/${cid}`, { method: "DELETE" });
+  },
+
+  // Progress
+  progress(action, { course_id, course_name, subskill, minutes }) {
+    return jfetch("/progress", { method: "POST", body: JSON.stringify({ action, course_id, course_name, subskill, minutes }) });
+  },
+  progressByCourse() {
+    return jfetch("/progress/by_course");
+  },
+  progressSummary(days = 7) {
+    return jfetch(`/progress/summary?days=${days}`);
+  }
 };

@@ -66,6 +66,17 @@ def init_db():
             level TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            course_id TEXT,
+            course_name TEXT,
+            subskill TEXT,
+            status TEXT CHECK(status IN ('planned','in_progress','done')) NOT NULL,
+            minutes INTEGER DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
         """
     )
     conn.commit()

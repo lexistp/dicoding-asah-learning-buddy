@@ -1,0 +1,4 @@
+{
+  // Force VS Code to use the backend venv for Python/Jupyter in this workspace
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/Scripts/python.exe"
+}

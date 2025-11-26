@@ -9,43 +9,6 @@ from ..db import get_conn, query
 from ..services.data_loader import load_excel_as_records
 
 
-def _contains(value: str, keyword: str) -> bool:
-    if not value or not keyword:
-        return False
-    return keyword.lower() in str(value).lower()
-
-
-def _match_level(course: dict, level: Optional[str]) -> bool:
-    if not level:
-        return True
-    for field in ("level", "course_level", "course_level_name"):
-        if _contains(course.get(field), level):
-            return True
-    return False
-
-
-def _fetch_courses(limit: int = 300):
-    try:
-        return sb.get_courses({"select": "*", "limit": limit})
-    except Exception:
-        return []
-
-
-def _filter_courses(courses, lp_hint=None, level=None, keywords=None):
-    filtered = []
-    keywords = keywords or []
-    for course in courses:
-        if lp_hint and not any(_contains(course.get(field), lp_hint) for field in ("learning_path", "learning_path_name", "lp_name", "track")):
-            continue
-        if not _match_level(course, level):
-            continue
-        if keywords:
-            if not any(_contains(course.get(field), kw) for kw in keywords for field in ("name", "title", "course_name", "description")):
-                continue
-        filtered.append(course)
-    return filtered
-
-
 router = APIRouter(prefix="/recommend", tags=["recommend"])
 
 
@@ -66,10 +29,19 @@ def learning_paths():
 
 @router.get("/courses")
 def courses(lp: Optional[str] = Query(default=None), q: Optional[str] = Query(default=None), level: Optional[str] = Query(default=None)):
-    courses = _fetch_courses()
-    keywords = [q] if q else []
-    filtered = _filter_courses(courses, lp_hint=lp, level=level, keywords=keywords)
-    return filtered[:100]
+    params = {"select": "*", "limit": 100}
+    if lp:
+        params["learning_path"] = f"eq.{lp}"
+        params["learning_path_id"] = f"eq.{lp}"
+    if q:
+        params["name"] = f"ilike.%{q}%"
+        params["description"] = f"ilike.%{q}%"
+    if level:
+        params["level"] = f"eq.{level}"
+    try:
+        return sb.get_courses(params)
+    except Exception as e:
+        raise HTTPException(502, f"Gagal mengambil courses: {e}")
 
 
 @router.get("/course_levels")
@@ -113,15 +85,17 @@ def by_onboarding(authorization: Optional[str] = Header(None)):
         elif "data" in r:
             lp_hint = "Data"
 
-    courses = _fetch_courses()
-    filtered = _filter_courses(courses, lp_hint=lp_hint, level=experience)
-    if not filtered:
-        try:
-            rows = load_excel_as_records("LP and Course Mapping.xlsx")
-            filtered = [r for r in rows if not lp_hint or _contains(r.get("learning_path"), lp_hint)]
-        except Exception:
-            filtered = []
-    return {"role": role, "experience": experience, "courses": filtered[:10]}
+    params = {"select": "*", "limit": 10}
+    if lp_hint:
+        params["learning_path"] = f"ilike.%{lp_hint}%"
+    if experience:
+        params["level"] = f"eq.{experience}"
+
+    try:
+        courses = sb.get_courses(params)
+        return {"role": role, "experience": experience, "courses": courses}
+    except Exception as e:
+        raise HTTPException(502, f"Gagal mengambil rekomendasi: {e}")
 
 
 @router.get("/roadmap")
@@ -148,18 +122,24 @@ def roadmap(authorization: Optional[str] = Header(None)):
     items.sort(key=lambda x: x.get("score", 0))
     targets = items[:5]
 
+    # Coba Supabase lebih dulu
     recs = []
-    all_courses = _fetch_courses()
-    if all_courses:
+    try:
         for it in targets:
             sub = it["subskill"]
             level = it["level"]
-            matches = _filter_courses(all_courses, keywords=[sub], level=level)
-            if not matches:
-                matches = _filter_courses(all_courses, keywords=[sub])
-            recs.append({"subskill": sub, "level": level, "courses": matches[:5]})
-        if any(block["courses"] for block in recs):
-            return {"targets": targets, "recommendations": recs}
+            params = {"select": "*", "limit": 5, "name": f"ilike.%{sub}%"}
+            # Coba juga filter level jika ada kolom level
+            params["level"] = f"eq.{level}"
+            courses = sb.get_courses(params)
+            if not courses:
+                # fallback ke description
+                params = {"select": "*", "limit": 5, "description": f"ilike.%{sub}%"}
+                courses = sb.get_courses(params)
+            recs.append({"subskill": sub, "level": level, "courses": courses})
+        return {"targets": targets, "recommendations": recs}
+    except Exception:
+        pass
 
     # Fallback: coba mapping dari Excel lokal
     try:
@@ -171,3 +151,4 @@ def roadmap(authorization: Optional[str] = Header(None)):
         return {"targets": targets, "recommendations": recs, "source": "excel"}
     except Exception as e:
         raise HTTPException(502, f"Tidak bisa membangun roadmap: {e}")
+

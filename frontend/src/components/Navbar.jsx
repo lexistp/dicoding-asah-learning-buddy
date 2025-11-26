@@ -17,10 +17,10 @@ export default function Navbar() {
 
   return (
     <header className="nav">
-      <div className="brand">
+      <Link className="brand" to="/">
         <div className="brand-logo">LB</div>
         <span>Learning Buddy</span>
-      </div>
+      </Link>
       <div className="nav-actions">
         {authed ? (
           <>

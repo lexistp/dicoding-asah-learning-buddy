@@ -1,12 +1,15 @@
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="Learning Buddy API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5175"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -57,9 +60,15 @@ def resource_data(sheet: Optional[str] = Query(default=None)):
 # Mount routers
 from .routes.recommend import router as recommend_router
 from .routes.assessment import router as assessment_router
+from .routes.ml import router as ml_router
+from .routes.progress import router as progress_router, build_progress_text
+from .ml.simple_nlp import recommend_by_query
+from .llm.gemini_client import generate_message
 
 app.include_router(recommend_router)
 app.include_router(assessment_router)
+app.include_router(ml_router)
+app.include_router(progress_router)
 
 
 # -------- Auth endpoints --------
@@ -121,6 +130,14 @@ def save_onboarding(req: OnboardingReq, email: str = Depends(user_from_auth)):
     return {"status": "ok"}
 
 
+@app.get("/onboarding/last")
+def get_onboarding_latest(email: str = Depends(user_from_auth)):
+    info = get_latest_onboarding(email)
+    if not info:
+        raise HTTPException(404, "Belum ada data onboarding")
+    return info
+
+
 # -------- Conversations --------
 class NewConvReq(BaseModel):
     title: Optional[str] = None
@@ -133,6 +150,19 @@ def create_conversation(req: NewConvReq, email: str = Depends(user_from_auth)):
     cid = execute(conn, "INSERT INTO conversations(user_email,title) VALUES(?,?)", (email, title))
     conn.close()
     return {"id": cid, "title": title}
+
+
+@app.delete("/conversations/{cid}")
+def delete_conversation(cid: int, email: str = Depends(user_from_auth)):
+    conn = get_conn()
+    rows = query(conn, "SELECT user_email FROM conversations WHERE id=?", (cid,))
+    if not rows or rows[0]["user_email"] != email:
+        conn.close()
+        raise HTTPException(404, "Percakapan tidak ditemukan")
+    execute(conn, "DELETE FROM messages WHERE conversation_id=?", (cid,))
+    execute(conn, "DELETE FROM conversations WHERE id=?", (cid,))
+    conn.close()
+    return {"status": "deleted"}
 
 
 @app.get("/conversations")
@@ -160,12 +190,39 @@ class NewMessageReq(BaseModel):
     text: str
 
 
-async def bot_reply(text: str) -> str:
-    # Logika sederhana sementara; bisa diganti ke model/LLM
-    lower = text.lower()
-    if "apa yang sebaiknya saya pelajari" in lower or "rekomendasi" in lower:
-        return "Saran awal: fokus ke dasar-dasar (algoritma, git), lalu pelajari 1 sub-skill per minggu. Aku juga bisa ambil daftar kursus dari Supabase di Dashboard."
-    return "Baik, saya catat. Mari kita pecah masalahnya dan buat langkah kecil yang bisa kamu lakukan hari ini."
+async def bot_reply(text: str, email: str) -> str:
+    """Semua dialog diarahkan ke Gemini dengan konteks profil & progres."""
+    info = get_latest_onboarding(email) or {}
+    persona = f"Role: {info.get('role') or '-'}, Level: {info.get('experience') or '-'}, Goal: {info.get('goal') or '-'}"
+    progress_summary = build_progress_text(email)
+    prompt_intro = (
+        "Kamu adalah Learning Buddy, asisten belajar Dicoding. "
+        "Jawablah singkat (maks 3 paragraf), beri langkah praktis & rekomendasi kursus relevan. "
+        "Jika data terbatas, jelaskan apa yang perlu pengguna lengkapi."
+    )
+    prompt = [
+        prompt_intro,
+        f"Persona pengguna: {persona}",
+        f"Ringkasan progres: {progress_summary}",
+        f"Pertanyaan terbaru: {text}",
+    ]
+    try:
+        return generate_message(prompt)
+    except Exception:
+        # Fallback manual jika GEMINI_API_KEY belum di-set/ada gangguan koneksi.
+        items = recommend_by_query(text, limit=3)
+        if items:
+            rows = []
+            for item in items:
+                name = item.get("name") or item.get("title") or item.get("course_name") or "Kursus Dicoding"
+                level = item.get("level") or item.get("course_level") or item.get("category") or ""
+                rows.append(f"- {name}{f' ({level})' if level else ''}")
+            return (
+                "Mode Gemini belum aktif, berikut opsi yang tetap bisa kamu eksplor:\n"
+                + "\n".join(rows)
+                + "\nKlik Mulai di Dashboard untuk menyimpan progresnya."
+            )
+        return "Server AI belum siap. Set GEMINI_API_KEY dan jalankan ulang backend untuk jawaban optimal."
 
 
 @app.post("/conversations/{cid}/messages")
@@ -178,7 +235,27 @@ async def post_message(cid: int, req: NewMessageReq, email: str = Depends(user_f
         raise HTTPException(404, "Percakapan tidak ditemukan")
 
     execute(conn, "INSERT INTO messages(conversation_id,role,text) VALUES(?,?,?)", (cid, "user", req.text))
-    reply = await bot_reply(req.text)
+    # update judul percakapan jika masih default
+    conv_rows = query(conn, "SELECT title FROM conversations WHERE id=?", (cid,))
+    if conv_rows:
+        current_title = conv_rows[0]["title"] or ""
+        snippet = req.text.strip()[:40]
+        if current_title.lower().startswith("obrolan baru") and snippet:
+            execute(conn, "UPDATE conversations SET title=? WHERE id=?", (snippet, cid))
+    reply = await bot_reply(req.text, email)
     execute(conn, "INSERT INTO messages(conversation_id,role,text) VALUES(?,?,?)", (cid, "bot", reply))
     conn.close()
     return {"reply": reply}
+
+
+def get_latest_onboarding(email: str):
+    conn = get_conn()
+    rows = query(
+        conn,
+        "SELECT role, experience, goal FROM onboarding WHERE email=? ORDER BY id DESC LIMIT 1",
+        (email,),
+    )
+    conn.close()
+    if rows:
+        return dict(rows[0])
+    return None

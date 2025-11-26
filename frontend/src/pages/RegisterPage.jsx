@@ -27,7 +27,7 @@ export default function RegisterPage() {
 
   return (
     <div className="auth-wrap" role="main">
-      <form className="card" onSubmit={onSubmit}>
+      <form className="card auth-card" onSubmit={onSubmit}>
         <h1>Register</h1>
         <div className="field">
           <label htmlFor="name">Name</label>
