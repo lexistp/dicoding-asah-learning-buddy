@@ -2,8 +2,9 @@ import sys
 import os
 
 # Setup environment
-os.environ['GEMINI_API_KEY'] = 'AIzaSyC9IZj0_dZ8nSVwjm6FGo1urmnaZQdJViM'
-os.environ['GEMINI_MODEL'] = 'gemini-2.0-flash-lite'
+if not os.getenv("GEMINI_API_KEY"):
+    raise SystemExit("Set GEMINI_API_KEY di environment sebelum menjalankan tes ini.")
+os.environ.setdefault('GEMINI_MODEL', 'gemini-2.0-flash-lite')
 
 # Add backend to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))

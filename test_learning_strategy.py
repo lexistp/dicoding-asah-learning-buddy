@@ -1,6 +1,7 @@
 import sys
 sys.path.append('backend')
 
+import os
 import pandas as pd
 from backend.ml.roadmap_generator import RoadmapGenerator
 from backend.ml.learning_strategy import LearningStrategyGenerator
@@ -29,7 +30,9 @@ print(f"   Test accuracy: {test_acc*100:.2f}%")
 print("\nInitializing Learning Strategy Generator")
 
 # API key
-GEMINI_API_KEY = "AIzaSyC9IZj0_dZ8nSVwjm6FGo1urmnaZQdJViM"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise SystemExit("Set GEMINI_API_KEY di environment sebelum menjalankan tes ini.")
 
 try:
     strategy_gen = LearningStrategyGenerator(

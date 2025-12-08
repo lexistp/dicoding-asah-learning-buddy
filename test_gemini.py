@@ -1,12 +1,15 @@
 import os
 import httpx
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyCsZFdR6MajP4O7E1HzROFK3xM35F17_0M")
-GEMINI_MODEL = "gemini-2.0-flash-lite"
+# Ambil key dari environment; jangan hardcode di repo publik.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
 API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
 print("Testing Gemini API Key")
-print(f"API Key: {GEMINI_API_KEY[:20]}...")
+if not GEMINI_API_KEY:
+    raise SystemExit("Set GEMINI_API_KEY di environment sebelum menjalankan tes ini.")
+print(f"API Key: {GEMINI_API_KEY[:6]}... (hidden)")
 print(f"Model: {GEMINI_MODEL}\n")
 
 try:

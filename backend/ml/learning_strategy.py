@@ -215,7 +215,9 @@ if __name__ == "__main__":
     print("\nInitializing Learning Strategy Generator")
     
     # API KEY
-    GEMINI_API_KEY = "AIzaSyC9IZj0_dZ8nSVwjm6FGo1urmnaZQdJViM"
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    if not GEMINI_API_KEY:
+        raise SystemExit("Set GEMINI_API_KEY di environment sebelum menjalankan contoh ini.")
     
     try:
         strategy_gen = LearningStrategyGenerator(
