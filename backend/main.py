@@ -60,15 +60,22 @@ def resource_data(sheet: Optional[str] = Query(default=None)):
 # Mount routers
 from .routes.recommend import router as recommend_router
 from .routes.assessment import router as assessment_router
-from .routes.ml import router as ml_router
+from .routes.ml_advanced import router as ml_router, get_strategy_generator, get_roadmap_generator, get_course_recommender
+from .routes.ml_simple import router as ml_simple_router
 from .routes.progress import router as progress_router, build_progress_text
-from .ml.simple_nlp import recommend_by_query
+# from .routes.ml_advanced import router as ml_advanced_router  # ✨ BARU
+from .ml.simple_nlp import recommend_by_query, extract_skills
 from .llm.gemini_client import generate_message
+import logging
 
 app.include_router(recommend_router)
 app.include_router(assessment_router)
+app.include_router(ml_simple_router)
 app.include_router(ml_router)
 app.include_router(progress_router)
+# app.include_router(ml_advanced_router)  # ✨ BARU
+
+logger = logging.getLogger(__name__)
 
 
 # -------- Auth endpoints --------
@@ -191,10 +198,96 @@ class NewMessageReq(BaseModel):
 
 
 async def bot_reply(text: str, email: str) -> str:
-    """Semua dialog diarahkan ke Gemini dengan konteks profil & progres."""
+    """Prioritas: ML advanced (learning strategy/recommender). Fallback: Gemini, lalu rekomendasi lokal ringkas."""
     info = get_latest_onboarding(email) or {}
-    persona = f"Role: {info.get('role') or '-'}, Level: {info.get('experience') or '-'}, Goal: {info.get('goal') or '-'}"
+    goal = info.get("goal") or "-"
+    role = info.get("role") or "-"
+    experience = info.get("experience") or "-"
+    persona = f"Role: {role}, Level: {experience}, Goal: {goal}"
     progress_summary = build_progress_text(email)
+    lower_text = text.lower()
+
+    def clean_val(v):
+        try:
+            import math
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                return "-"
+        except Exception:
+            pass
+        if v is None:
+            return "-"
+        s = str(v).strip()
+        return "-" if s.lower() in ("nan", "none", "") else s
+
+    # 0) Intent rekomendasi kursus (SentenceTransformer)
+    if any(k in lower_text for k in ["rekomendasi", "kelas", "course"]):
+        try:
+            recommender = get_course_recommender()
+            results = recommender.recommend(
+                user_input=text,
+                user_level=experience if experience != "-" else None,
+                top_k=5
+            )
+            df = results if hasattr(results, "to_dict") else None
+            items = df.to_dict("records") if df is not None else []
+            lines = []
+            for idx, item in enumerate(items[:5], start=1):
+                name = clean_val(item.get("course_name") or item.get("name") or "Kursus Dicoding")
+                level = clean_val(item.get("course_level") or item.get("level") or "")
+                lines.append(f"{idx}. {name}{f' ({level})' if level and level != '-' else ''}")
+            body = "\n".join(lines) if lines else "- Belum ada rekomendasi."
+            return (
+                "Rekomendasi kursus (ML advanced):\n"
+                f"Persona: {persona}\n"
+                f"{body}\n"
+                "Next: pilih satu, klik Mulai di Dashboard, rekam progres."
+            )
+        except Exception:
+            logger.exception("Course recommender failed")
+
+    # 1) Coba generator strategi (ML advanced)
+    try:
+        roadmap_gen = get_roadmap_generator()
+        strategy_gen = get_strategy_generator()
+        result = strategy_gen.generate_from_query(
+            query=text,
+            roadmap_generator=roadmap_gen,
+            goal=goal if goal != "-" else None,
+            top_n=5
+        )
+        next_skills = result.get("next_skills") or []
+        strategy_text = result.get("strategy") or ""
+        details = result.get("next_skills_details") or []
+
+        if isinstance(strategy_text, str):
+            lowered = strategy_text.lower()
+            # Jika Gemini menolak (403/leaked) atau generator mengirim pesan error, jatuhkan ke fallback
+            if "error generating" in lowered or "403" in lowered or "api key" in lowered:
+                raise RuntimeError(strategy_text)
+
+        detail_lines = []
+        for idx, item in enumerate(details[:5], start=1):
+            skill_name = clean_val(item.get("skill") or f"Skill {idx}")
+            score = item.get("score", "")
+            detail_lines.append(f"{idx}. {skill_name}{f' (score {score:.2f})' if isinstance(score, (int,float)) else ''}")
+
+        numbered_strategy = []
+        for i, line in enumerate((strategy_text or "").split("\n"), start=1):
+            line = line.strip()
+            if line:
+                numbered_strategy.append(f"{i}. {line}")
+        return (
+            "Rencana belajar (ML Advanced):\n"
+            f"Persona: {persona}\n"
+            f"Next skills:\n"
+            + ("\n".join(f"{i+1}. {s}" for i, s in enumerate(next_skills)) if next_skills else "-\n")
+            + ("\nDetail:\n" + "\n".join(detail_lines) + "\n" if detail_lines else "")
+            + ("Strategi:\n" + "\n".join(numbered_strategy) if numbered_strategy else (strategy_text or ""))
+        )
+    except Exception:
+        logger.exception("ML advanced strategy failed")
+
+    # 2) Coba Gemini (jika tersedia)
     prompt_intro = (
         "Kamu adalah Learning Buddy, asisten belajar Dicoding. "
         "Jawablah singkat (maks 3 paragraf), beri langkah praktis & rekomendasi kursus relevan. "
@@ -209,20 +302,24 @@ async def bot_reply(text: str, email: str) -> str:
     try:
         return generate_message(prompt)
     except Exception:
-        # Fallback manual jika GEMINI_API_KEY belum di-set/ada gangguan koneksi.
-        items = recommend_by_query(text, limit=3)
-        if items:
-            rows = []
-            for item in items:
-                name = item.get("name") or item.get("title") or item.get("course_name") or "Kursus Dicoding"
-                level = item.get("level") or item.get("course_level") or item.get("category") or ""
-                rows.append(f"- {name}{f' ({level})' if level else ''}")
-            return (
-                "Mode Gemini belum aktif, berikut opsi yang tetap bisa kamu eksplor:\n"
-                + "\n".join(rows)
-                + "\nKlik Mulai di Dashboard untuk menyimpan progresnya."
-            )
-        return "Server AI belum siap. Set GEMINI_API_KEY dan jalankan ulang backend untuk jawaban optimal."
+        logger.exception("Gemini failed")
+
+    # 3) Fallback lokal sederhana
+    skills = extract_skills(text, limit=5)
+    items = recommend_by_query(text, limit=5)
+    rec_lines = []
+    for idx, item in enumerate(items, start=1):
+        name = clean_val(item.get("course_name") or item.get("name") or item.get("title") or "Kursus Dicoding")
+        level = clean_val(item.get("course_level") or item.get("level") or item.get("category") or "")
+        rec_lines.append(f"{idx}. {name}{f' ({level})' if level and level != '-' else ''}")
+    skill_line = f"Topik terdeteksi: {', '.join(skills)}" if skills else "Topik belum terdeteksi, sebutkan skill/tujuan."
+    rekom = "\n".join(rec_lines) if rec_lines else "- Belum ada rekomendasi, sebutkan kursus/skill yang dicari."
+    return (
+        "Mode offline (tanpa Gemini):\n"
+        f"{skill_line}\n"
+        f"Rekomendasi lokal:\n{rekom}\n"
+        "Next: pilih kursus, klik Mulai, dan rekam progres di Dashboard."
+    )
 
 
 @app.post("/conversations/{cid}/messages")

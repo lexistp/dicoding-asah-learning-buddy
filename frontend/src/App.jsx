@@ -36,15 +36,18 @@ export default function App() {
 function AppShell() {
   const location = useLocation();
   const isEmbed = location.pathname.startsWith("/embed");
+  
+  // Sembunyikan navbar di halaman login, register, dan embed
+  const hideNavbar = isEmbed || location.pathname === "/login" || location.pathname === "/register";
 
   return (
     <div className="app-shell">
-      {!isEmbed && <Navbar />}
+      {!hideNavbar && <Navbar />}
       <main className="app-main">
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/login" element={<LoginPage />} />
           <Route path="/onboarding" element={<OnboardingPage />} />
           <Route
             path="/chat"
@@ -73,7 +76,7 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </main>
-      {!isEmbed && <Footer />}
+      {!hideNavbar && <Footer />}
     </div>
   );
 }

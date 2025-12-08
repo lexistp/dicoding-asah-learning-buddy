@@ -1,98 +1,107 @@
 from __future__ import annotations
 
-import re
-from typing import List, Dict, Any, Tuple
+from pathlib import Path
+from typing import List, Dict, Any
 
-try:
-    from rank_bm25 import BM25Okapi  # type: ignore
-except Exception:  # pragma: no cover
-    BM25Okapi = None  # fallback nanti
+import pandas as pd
+from rapidfuzz import fuzz, process
 
-try:
-    from rapidfuzz import process, fuzz  # type: ignore
-except Exception:  # pragma: no cover
-    process = None
-    fuzz = None
+from backend.services.data_loader import load_excel_as_records
 
-from ..utils import supabase_client as sb
-from ..services.data_loader import load_excel_as_records
+SKILL_CSV = Path(__file__).parent / "Skill.csv"
+
+_SKILLS: List[str] | None = None
+_COURSES: List[Dict[str, Any]] | None = None
 
 
-DEFAULT_SUBSKILLS = [
-    "HTML/CSS", "JavaScript", "React", "State Management", "Testing",
-    "API Design", "Database", "Authentication", "Caching",
-    "Python", "Data Preprocessing", "Modeling", "Evaluation", "Deployment",
-    "SQL", "Data Cleaning", "Visualization", "Statistics", "Storytelling"
-]
+def _load_skills() -> List[str]:
+    """Load unique skill keywords from the bundled CSV once."""
+    global _SKILLS
+    if _SKILLS is not None:
+        return _SKILLS
+
+    if SKILL_CSV.exists():
+        try:
+            df = pd.read_csv(SKILL_CSV)
+            _SKILLS = sorted(set(df["skill"].dropna().astype(str)))
+        except Exception:
+            _SKILLS = []
+    else:
+        _SKILLS = []
+    return _SKILLS
 
 
-_TOKEN_RE = re.compile(r"[a-zA-Z0-9_+#]+")
-
-
-def tokenize(text: str) -> List[str]:
-    if not text:
+def extract_skills(text: str, limit: int = 6) -> List[str]:
+    skills = _load_skills()
+    if not text or not skills:
         return []
-    return [t.lower() for t in _TOKEN_RE.findall(text.lower())]
+    matches = process.extract(
+        text,
+        skills,
+        scorer=fuzz.partial_ratio,
+        limit=limit,
+        score_cutoff=60,
+    )
+    return [m[0] for m in matches]
 
 
-def _load_courses_fallback() -> List[Dict[str, Any]]:
-    # coba dari Resource Data
+def _level_name(raw_level: Any) -> str:
     try:
-        rows = load_excel_as_records("Resource Data Learning Buddy.xlsx")
-        if rows:
-            return rows
-    except Exception:
-        pass
-    # coba dari LP + Course Mapping
+        lvl = int(raw_level)
+    except (TypeError, ValueError):
+        return "Unknown"
+    if lvl <= 2:
+        return "Beginner"
+    if lvl == 3:
+        return "Intermediate"
+    if lvl >= 4:
+        return "Advanced"
+    return "Unknown"
+
+
+def _load_courses() -> List[Dict[str, Any]]:
+    """Read course data from the Excel mapping file lazily."""
+    global _COURSES
+    if _COURSES is not None:
+        return _COURSES
+
     try:
-        rows = load_excel_as_records("LP and Course Mapping.xlsx")
-        return rows
-    except Exception:
-        return []
+        rows = load_excel_as_records("LP and Course Mapping.xlsx", "Course")
+    except Exception as exc:
+        print(f"[simple_nlp] gagal memuat data course: {exc}")
+        rows = []
 
-
-def load_courses(limit: int = 500) -> List[Dict[str, Any]]:
-    try:
-        return sb.get_courses({"select": "*", "limit": limit})
-    except Exception:
-        return _load_courses_fallback()[:limit]
-
-
-def extract_skills(text: str, candidates: List[str] | None = None, limit: int = 8) -> List[Tuple[str, float]]:
-    """Ekstraksi skill berbasis fuzzy matching sederhana terhadap daftar kandidat.
-    Mengembalikan (skill, skor 0..100).
-    """
-    cands = candidates or DEFAULT_SUBSKILLS
-    if process and fuzz:  # gunakan rapidfuzz jika ada
-        results = process.extract(text, cands, scorer=fuzz.token_set_ratio, limit=limit)
-        return [(r[0], float(r[1])) for r in results if r[1] >= 60]
-    # fallback: substring match kasar
-    t = text.lower()
-    out: List[Tuple[str, float]] = []
-    for s in cands:
-        out.append((s, 100.0 if s.lower() in t else 0.0))
-    return [x for x in out if x[1] > 0]
-
-
-def recommend_by_query(query: str, limit: int = 10) -> List[Dict[str, Any]]:
-    """Rekomendasi kursus berbasis kemiripan BM25 pada name/description."""
-    rows = load_courses(limit=1000)
-    corpus = []
+    courses: List[Dict[str, Any]] = []
     for r in rows:
-        text = " ".join(str(r.get(k, "")) for k in ("name", "title", "course_name", "description"))
-        corpus.append(tokenize(text))
+        name = str(r.get("course_name") or "").strip()
+        if not name:
+            continue
+        courses.append(
+            {
+                "course_id": r.get("course_id"),
+                "course_name": name,
+                "learning_path_id": r.get("learning_path_id"),
+                "course_level": _level_name(r.get("course_level_str")),
+            }
+        )
+    _COURSES = courses
+    return _COURSES
 
-    q_tokens = tokenize(query)
-    if BM25Okapi and corpus and q_tokens:
-        bm25 = BM25Okapi(corpus)
-        scores = bm25.get_scores(q_tokens)
-        ranked = sorted(zip(rows, scores), key=lambda x: x[1], reverse=True)
-        return [r for r, s in ranked[:limit]]
 
-    # fallback: frekuensi sederhana
-    def score(doc: List[str]) -> int:
-        return sum(doc.count(t) for t in set(q_tokens))
+def recommend_by_query(query: str, limit: int = 6) -> List[Dict[str, Any]]:
+    courses = _load_courses()
+    if not query or not courses:
+        return []
 
-    ranked = sorted(zip(rows, [score(d) for d in corpus]), key=lambda x: x[1], reverse=True)
-    return [r for r, s in ranked[:limit]]
-
+    matches = process.extract(
+        query,
+        [c["course_name"] for c in courses],
+        scorer=fuzz.token_sort_ratio,
+        limit=limit,
+    )
+    results: List[Dict[str, Any]] = []
+    for _, score, idx in matches:
+        course = dict(courses[idx])
+        course["score"] = float(score)
+        results.append(course)
+    return results
