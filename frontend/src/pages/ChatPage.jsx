@@ -10,6 +10,25 @@ export default function ChatPage({ compact = false }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [profile, setProfile] = useState(null);
+  const [progressSummary, setProgressSummary] = useState(null);
+  const [progressStats, setProgressStats] = useState([]);
+  const [lastSkills, setLastSkills] = useState([]);
+  const [lastSchedule, setLastSchedule] = useState([]);
+  const [strategySource, setStrategySource] = useState(null); // "gemini" atau "fallback"
+  const [lastStrategyText, setLastStrategyText] = useState("");
+  const [courseCards, setCourseCards] = useState([]);
+  const [miniAssessment, setMiniAssessment] = useState(null); // {assessment, answers}
+  const [assessmentLoading, setAssessmentLoading] = useState(false);
+  const [showContextPanel, setShowContextPanel] = useState(
+    typeof window !== "undefined" ? window.innerWidth > 1024 : true
+  );
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth > 1024) setShowContextPanel(true);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const bottomRef = useRef(null);
 
   const loadConversations = () => {
@@ -51,6 +70,13 @@ export default function ChatPage({ compact = false }) {
 
   useEffect(() => {
     Backend.onboardingProfile().then(setProfile).catch(() => setProfile(null));
+    Backend.progressSummary(7).then(setProgressSummary).catch(() => setProgressSummary(null));
+    Backend.progressByCourse().then((res) => {
+      if (Array.isArray(res)) {
+        const top3 = res.sort((a, b) => (b.minutes || 0) - (a.minutes || 0)).slice(0, 3);
+        setProgressStats(top3);
+      }
+    }).catch(() => setProgressStats([]));
   }, []);
 
   useEffect(() => {
@@ -85,28 +111,116 @@ export default function ChatPage({ compact = false }) {
       let cid = active;
       if (!cid) {
         cid = await newConversation();
+        setActive(cid);
       }
-      const reply = await Backend.sendMessage(cid, text);
-      setMessages((m) => [...m, { role: "bot", text: reply }]);
+      // 1) Coba langsung minta strategi belajar via ML-Advanced (Gemini)
+      const strategyRes = await Backend.generateLearningStrategy({
+        query: text,
+        goal: profile?.goal || null,
+        top_n: 5,
+      });
+      const strategyText = strategyRes?.strategy || "(Tidak ada strategi yang dihasilkan.)";
+      const nextSkills = strategyRes?.next_skills || [];
+      setLastSkills(nextSkills);
+      setLastStrategyText(strategyText || "");
+      setStrategySource(strategyText?.toLowerCase().includes("gagal membuat strategi") ? "fallback" : "gemini");
+      setLastSchedule(parseSchedule(strategyText));
+      setCourseCards([]); // reset kursus jika fokus strategi
+      setMessages((m) => [
+        ...m,
+        {
+          role: "bot",
+          text: (
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6, display: "flex", gap: 8, alignItems: "center" }}>
+                <span>Saran strategi belajar</span>
+                <span style={{
+                  background: strategyText?.toLowerCase().includes("gagal membuat strategi") ? "#f59e0b" : "#10b981",
+                  color: "#fff",
+                  borderRadius: 8,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  fontWeight: 700
+                }}>
+                  {strategyText?.toLowerCase().includes("gagal membuat strategi") ? "Fallback lokal" : "Gemini"}
+                </span>
+                <button
+                  style={{ marginLeft: "auto", border: "none", background: "#e0f2fe", color: "#0f172a", padding: "6px 10px", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}
+                  onClick={() => navigator.clipboard?.writeText(strategyText || "")}
+                  title="Salin strategi"
+                >
+                  Salin
+                </button>
+              </div>
+              {nextSkills?.length ? (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  {nextSkills.map((s) => (
+                    <span key={s} style={{ background: "#eef2ff", color: "#312e81", padding: "6px 10px", borderRadius: 12, fontWeight: 700, fontSize: 12 }}>
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div style={{ whiteSpace: "pre-wrap" }}>{strategyText}</div>
+            </div>
+          ),
+        },
+      ]);
       setConvs((list) => list.map((item) => {
-        if (item.id === cid && item.title.toLowerCase().startsWith("obrolan baru")) {
-          return { ...item, title: text.slice(0, 40) };
-        }
-        return item;
-      }));
+          if (item.id === cid && item.title.toLowerCase().startsWith("obrolan baru")) {
+            return { ...item, title: text.slice(0, 40) };
+          }
+          return item;
+        }));
+      // auto recommend courses if user explicitly asks
+      if (/kelas|course|rekomendasi/i.test(text)) {
+        fetchCourses(text);
+      }
     } catch {
-      // Fallback ke endpoint chatbot sederhana jika API percakapan bermasalah
+      // 2) Fallback: kirim ke backend chat default
       try {
-        const reply = await sendMessageToBot(text);
+        let cid = active;
+        if (!cid) {
+          cid = await newConversation();
+        }
+        const reply = await Backend.sendMessage(cid, text);
         setMessages((m) => [...m, { role: "bot", text: reply }]);
-      } catch (_) {
-        setMessages((m) => [...m, { role: "bot", text: "(Offline) Baik, saya catat." }]);
+        setConvs((list) => list.map((item) => {
+          if (item.id === cid && item.title.toLowerCase().startsWith("obrolan baru")) {
+            return { ...item, title: text.slice(0, 40) };
+          }
+          return item;
+        }));
+      } catch {
+        // 3) Fallback offline
+        try {
+          const reply = await sendMessageToBot(text);
+          setMessages((m) => [...m, { role: "bot", text: reply }]);
+        } catch (_) {
+          setMessages((m) => [...m, { role: "bot", text: "(Offline) Baik, saya catat." }]);
+        }
       }
     } finally { setLoading(false); }
   };
 
   const onKey = (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const parseSchedule = (text) => {
+    if (!text) return [];
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    const schedule = [];
+    lines.forEach((l) => {
+      const match = l.match(/hari\s*(\d+)[:\-]?\s*(.+)/i);
+      if (match) {
+        schedule.push({
+          day: Number(match[1]),
+          detail: match[2],
+        });
+      }
+    });
+    return schedule;
   };
 
   const suggestionPrompts = profile ? [
@@ -124,7 +238,102 @@ export default function ChatPage({ compact = false }) {
     { label: "3 rekomendasi cepat", text: "Berikan 3 rekomendasi kursus terbaik untuk saya" },
     { label: "5 rekomendasi", text: "Berikan 5 rekomendasi kursus sesuai profil saya" },
     { label: "Roadmap singkat", text: "Buatkan roadmap belajar singkat sesuai tujuan saya" },
+    { label: "Assessment singkat", text: null },
   ];
+
+  const templateQuestions = [
+    "Susun plan harian 7 hari untuk jadi React Developer",
+    "Kelas Dicoding apa saja yang cocok untuk level intermediate backend?",
+    "Skill apa yang paling berkembang minggu ini?",
+    "Bantu motivasi singkat supaya tetap konsisten belajar",
+  ];
+
+  const fetchCourses = async (queryText) => {
+    try {
+      const res = await Backend.recommendCoursesST({ user_input: queryText, user_level: profile?.experience || null, top_k: 3 });
+      const courses = res.courses || [];
+      setCourseCards(courses);
+      setMessages((m) => [
+        ...m,
+        {
+          role: "bot",
+          text: (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ fontWeight: 800 }}>Rekomendasi kelas untukmu</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {courses.map((c, idx) => (
+                  <div key={idx} style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#fff" }}>
+                    <div style={{ fontWeight: 700, color: "#0f172a" }}>{c.title || c.course_name || "Kelas"}</div>
+                    <div style={{ color: "#475569", fontSize: 13 }}>{c.level || c.skill_level || "All level"}</div>
+                    <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {(c.tags || c.skills || []).slice(0, 3).map((t) => (
+                        <span key={t} className="pill-skill">{t}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ),
+        },
+      ]);
+    } catch (e) {
+      console.error("course recommend failed", e);
+    }
+  };
+
+  const startMiniAssessment = async () => {
+    setAssessmentLoading(true);
+    setMiniAssessment(null);
+    try {
+      const subs = lastSkills.length ? lastSkills.slice(0, 3) : ["HTML", "CSS", "JavaScript"];
+      const res = await Backend.generateAssessment(subs, 6);
+      const assessment = res.assessment || {};
+      const initAnswers = {};
+      Object.keys(assessment).forEach((k) => { initAnswers[k] = []; });
+      setMiniAssessment({ assessment, answers: initAnswers });
+      setMessages((m) => [
+        ...m,
+        { role: "bot", text: "Assessment singkat siap. Jawab pertanyaan di panel bawah, lalu kirim." },
+      ]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "bot", text: `Gagal membuat assessment: ${e.message}` }]);
+    } finally {
+      setAssessmentLoading(false);
+    }
+  };
+
+  const toggleAnswer = (subskill, idx) => {
+    setMiniAssessment((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev };
+      const arr = next.answers[subskill] ? [...next.answers[subskill]] : [];
+      if (arr.includes(idx)) {
+        next.answers[subskill] = arr.filter((i) => i !== idx);
+      } else {
+        next.answers[subskill] = [...arr, idx];
+      }
+      return next;
+    });
+  };
+
+  const submitMiniAssessment = async () => {
+    if (!miniAssessment) return;
+    setAssessmentLoading(true);
+    try {
+      const payload = { answers: {} };
+      Object.entries(miniAssessment.answers).forEach(([sub, arr]) => {
+        payload.answers[sub] = arr.map((i) => `ans_${i}`);
+      });
+      const res = await Backend.submitAssessmentAdvanced(payload);
+      setMessages((m) => [...m, { role: "bot", text: `Hasil assessment singkat:\n${JSON.stringify(res.results || res, null, 2)}` }]);
+      setMiniAssessment(null);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "bot", text: `Gagal submit assessment: ${e.message}` }]);
+    } finally {
+      setAssessmentLoading(false);
+    }
+  };
 
   return (
     <>
@@ -329,7 +538,7 @@ export default function ChatPage({ compact = false }) {
         .chat-area-modern {
           display: flex;
           flex-direction: column;
-          background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 50%, #f0f9ff 100%);
+          background: var(--gradient-hero);
           background-size: 200% 200%;
           animation: gradientShift 15s ease infinite;
           height: 100%;
@@ -337,14 +546,88 @@ export default function ChatPage({ compact = false }) {
           position: relative;
         }
 
-        .chat-messages {
+        .chat-topbar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px 16px 0 16px;
+          gap: 12px;
+        }
+        .topbar-left { display: grid; gap: 4px; }
+        .topbar-title { font-weight: 800; color: #0f172a; font-size: 18px; }
+        .topbar-sub { color: #475569; font-size: 13px; }
+        .topbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn-cta { border: 1px solid #e2e8f0; background: #fff; border-radius: 10px; padding: 8px 12px; font-weight: 700; cursor: pointer; color: #1f2937; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .btn-cta.primary { background: var(--gradient-primary); color: #fff; border: none; }
+        .btn-cta.ghost { background: #f8fafc; color: #0f172a; }
+
+        .chat-body-grid {
           flex: 1;
+          display: grid;
+          grid-template-columns: 1fr 320px;
+          gap: 16px;
+          padding: 16px 16px 0 16px;
+          overflow: hidden;
+        }
+
+        .chat-messages {
           overflow-y: auto;
           padding: 32px 24px;
           display: flex;
           flex-direction: column;
           gap: 16px;
           scroll-behavior: smooth;
+          background: transparent;
+          height: 100%;
+        }
+
+        .context-panel {
+          height: 100%;
+          overflow-y: auto;
+          padding: 8px 4px 16px 0;
+          display: grid;
+          gap: 12px;
+        }
+
+        .context-card {
+          background: #fff;
+          border: 1px solid #e2e8f0;
+          border-radius: 12px;
+          padding: 12px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        }
+
+        .context-card h4 {
+          margin: 0 0 8px;
+          font-size: 14px;
+          font-weight: 700;
+          color: #1f2937;
+        }
+
+        .pill-skill {
+          background: #eef2ff;
+          color: #312e81;
+          padding: 6px 10px;
+          border-radius: 12px;
+          font-weight: 700;
+          font-size: 12px;
+        }
+
+        .timeline { margin-top: 12px; display: grid; gap: 8px; }
+        .timeline-item { display: grid; grid-template-columns: 32px 1fr; gap: 8px; align-items: center; padding: 8px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+        .timeline-dot { width: 32px; height: 32px; border-radius: 50%; background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; }
+        .timeline-title { font-weight: 700; color: #0f172a; font-size: 14px; }
+        .timeline-sub { font-size: 12px; color: #475569; }
+
+        .badge-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 10px;
+          border-radius: 10px;
+          font-weight: 700;
+          font-size: 12px;
+          color: #fff;
         }
 
         .welcome-container {
@@ -539,6 +822,15 @@ export default function ChatPage({ compact = false }) {
           .suggestion-grid {
             grid-template-columns: 1fr;
           }
+
+          .chat-body-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .context-panel {
+            grid-template-columns: 1fr;
+            grid-auto-flow: row;
+          }
         }
 
         /* Scrollbar styling */
@@ -623,69 +915,204 @@ export default function ChatPage({ compact = false }) {
         )}
 
         <section className="chat-area-modern">
-          <div className="chat-messages">
-            {messages.length === 0 ? (
-              <div className="welcome-container">
-                <h1 className="welcome-title">
-                  {profile ? `Halo ${profile.role || 'Learner'}! 👋` : "Selamat Datang di Learning Buddy! 🎓"}
-                </h1>
-                <p className="welcome-subtitle">
-                  {profile 
-                    ? "Apa yang ingin kamu pelajari hari ini? Pilih salah satu topik atau tanyakan langsung!"
-                    : "Tanyakan apapun tentang pembelajaran Dicoding. Saya siap membantu!"}
-                </p>
-
-                <div className="suggestion-grid">
-                  {suggestionPrompts.map((prompt, idx) => (
-                    <button
-                      key={idx}
-                      className="suggestion-card"
-                      onClick={() => send(prompt)}
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div style={{ width: "100%", maxWidth: "900px", margin: "0 auto" }}>
-                {messages.map((m, i) => (
-                  <div key={i} style={{
-                    animation: 'fadeInUp 0.4s ease-out',
-                    marginBottom: '16px'
-                  }}>
-                    <ChatBubble role={m.role} text={m.text} />
-                  </div>
-                ))}
-                <div ref={bottomRef} />
-                {loading && (
-                  <div style={{
-                    padding: '16px 20px',
-                    background: 'white',
-                    borderRadius: '14px',
-                    width: 'fit-content',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
-                    animation: 'fadeInUp 0.3s ease-out'
-                  }}>
-                    <div className="loading-dots">
-                      <div className="loading-dot"></div>
-                      <div className="loading-dot"></div>
-                      <div className="loading-dot"></div>
-                    </div>
-                  </div>
+          <div className="chat-topbar">
+            <div className="topbar-left">
+              <div className="topbar-title">Chat</div>
+              <div className="topbar-sub">{profile ? `Halo, ${profile.role || "Learner"}!` : "Selamat datang di Learning Buddy"}</div>
+            </div>
+              <div className="topbar-actions">
+                <button className="btn-cta ghost" onClick={() => setShowContextPanel((v) => !v)}>
+                  {showContextPanel ? "Sembunyikan Panel" : "Tampilkan Panel"}
+                </button>
+                <button className="btn-cta" onClick={() => window.location.assign("/onboarding")}>Deteksi Job & Skills</button>
+                <button className="btn-cta" onClick={() => window.location.assign("/dashboard")}>Lihat Roadmap</button>
+                <button className="btn-cta primary" onClick={() => window.location.assign("/dashboard")}>Mulai Assessment</button>
+                {strategySource && (
+                  <span
+                    className="badge-status"
+                    style={{ background: strategySource === "fallback" ? "var(--brand-amber)" : "var(--brand-green)" }}
+                    title={strategySource === "fallback" ? "Gemini tidak tersedia/invalid. Menggunakan strategi lokal." : "Strategi dihasilkan oleh Gemini."}
+                  >
+                    {strategySource === "fallback" ? "Mode: Fallback" : "Mode: Gemini"}
+                  </span>
                 )}
               </div>
-            )}
+            </div>
+          <div className="chat-body-grid">
+            <div className="chat-messages">
+              {messages.length === 0 ? (
+                <div className="welcome-container">
+                  <h1 className="welcome-title">
+                    {profile ? `Halo ${profile.role || 'Learner'}! 👋` : "Selamat Datang di Learning Buddy! 🎓"}
+                  </h1>
+                  <p className="welcome-subtitle">
+                    {profile 
+                      ? "Apa yang ingin kamu pelajari hari ini? Pilih salah satu topik atau tanyakan langsung!"
+                      : "Tanyakan apapun tentang pembelajaran Dicoding. Saya siap membantu!"}
+                  </p>
+
+                  {profile && (
+                    <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 14, marginBottom: 14, boxShadow: "0 10px 30px rgba(0,0,0,0.05)" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <div style={{ fontWeight: 800, color: "#0f172a" }}>Tujuan kamu</div>
+                          <div style={{ color: "#475569" }}>{profile.goal || "Belum ada goal. Isi di onboarding."}</div>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontWeight: 700, color: "#0f172a" }}>Ringkas progres</div>
+                          <div style={{ color: "#475569", fontSize: 13, maxWidth: 260, whiteSpace: "pre-wrap" }}>
+                            {progressSummary || "Belum ada progres tercatat."}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="suggestion-grid">
+                    {suggestionPrompts.map((prompt, idx) => (
+                      <button
+                        key={idx}
+                        className="suggestion-card"
+                        onClick={() => send(prompt)}
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                    <button className="suggestion-card" onClick={() => send("Skill apa yang paling berkembang minggu ini?")}>
+                      Skill apa yang paling berkembang minggu ini?
+                    </button>
+                    <button className="suggestion-card" onClick={() => send("Rekomendasikan roadmap 1 minggu ke depan untuk goal saya")}>
+                      Rekomendasikan roadmap 1 minggu ke depan
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ width: "100%", maxWidth: "900px", margin: "0 auto" }}>
+                  {messages.map((m, i) => (
+                    <div key={i} style={{
+                      animation: 'fadeInUp 0.4s ease-out',
+                      marginBottom: '16px'
+                    }}>
+                      <ChatBubble role={m.role} text={m.text} />
+                    </div>
+                  ))}
+                  <div ref={bottomRef} />
+                  {loading && (
+                    <div style={{
+                      padding: '16px 20px',
+                      background: 'white',
+                      borderRadius: '14px',
+                      width: 'fit-content',
+                      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
+                      animation: 'fadeInUp 0.3s ease-out'
+                    }}>
+                      <div className="loading-dots">
+                        <div className="loading-dot"></div>
+                        <div className="loading-dot"></div>
+                        <div className="loading-dot"></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="context-panel" style={{ display: showContextPanel ? "grid" : "none" }}>
+              <div className="context-card">
+                <h4>Profil & Progres</h4>
+                <div style={{ fontSize: 13, color: "#475569", display: "grid", gap: 4 }}>
+                  <div><strong>Role:</strong> {profile?.role || "-"}</div>
+                  <div><strong>Level:</strong> {profile?.experience || "-"}</div>
+                  <div><strong>Goal:</strong> {profile?.goal || "-"}</div>
+                  <div style={{ marginTop: 8 }}><strong>Ringkasan progres:</strong></div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{progressSummary || "Belum ada progres tercatat."}</div>
+                </div>
+              </div>
+
+              <div className="context-card">
+                <h4>Roadmap Berikutnya</h4>
+                {lastSkills?.length ? (
+                  <>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {lastSkills.map((s) => (
+                        <span key={s} className="pill-skill">{s}</span>
+                      ))}
+                    </div>
+                    <div className="timeline">
+                      {(lastSchedule.length ? lastSchedule : lastSkills.map((s, idx) => ({ day: idx + 1, detail: `${s}: fokus 45-60 menit` }))).map((item, idx) => (
+                        <div key={idx} className="timeline-item">
+                          <div className="timeline-dot">{item.day || idx + 1}</div>
+                          <div className="timeline-body">
+                            <div className="timeline-title">Hari {item.day || idx + 1}</div>
+                            <div className="timeline-sub">{item.detail}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#94a3b8" }}>Kirim pertanyaan untuk memunculkan roadmap.</div>
+                )}
+              </div>
+
+              <div className="context-card">
+                <h4>Statistik Progres (Top)</h4>
+                {progressStats?.length ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {progressStats.map((p, idx) => (
+                      <div key={`${p.course_name || p.course_id || idx}`} style={{ display: "grid", gap: 4 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600, color: "#0f172a" }}>
+                          <span>{p.course_name || p.course_id || "Kursus"}</span>
+                          <span>{p.minutes || 0} mnt</span>
+                        </div>
+                        <div style={{ height: 6, background: "#e2e8f0", borderRadius: 999 }}>
+                          <div style={{ width: `${Math.min(100, (p.minutes || 0) / 120 * 100)}%`, height: "100%", borderRadius: 999, background: "linear-gradient(135deg,#2563eb,#3b82f6)" }}></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#94a3b8" }}>Belum ada aktivitas minggu ini.</div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="chat-input-container">
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+              <select
+                style={{ padding: "8px 10px", borderRadius: 10, border: "1px solid #e2e8f0" }}
+                defaultValue=""
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val) send(val);
+                  e.target.value = "";
+                }}
+              >
+                <option value="">Template pertanyaan cepat</option>
+                {templateQuestions.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <button
+                className="btn-cta"
+                onClick={() => lastStrategyText && navigator.clipboard?.writeText(lastStrategyText)}
+                disabled={!lastStrategyText}
+              >
+                Salin strategi terakhir
+              </button>
+            </div>
             <div className="quick-actions-row">
               {quickActionsList.map((qa, idx) => (
                 <button
                   key={idx}
                   className="quick-action-btn"
-                  onClick={() => send(qa.text)}
-                  disabled={loading}
+                  onClick={() => {
+                    if (!qa.text) {
+                      startMiniAssessment();
+                    } else {
+                      send(qa.text);
+                    }
+                  }}
+                  disabled={loading || assessmentLoading}
                 >
                   {qa.label}
                 </button>
@@ -725,6 +1152,39 @@ export default function ChatPage({ compact = false }) {
               </button>
             </div>
           </div>
+          {miniAssessment && (
+            <div style={{ padding: 16, background: "#fff", borderTop: "1px solid #e2e8f0" }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Assessment singkat</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {Object.entries(miniAssessment.assessment || {}).map(([subskill, questions]) => (
+                  <div key={subskill} style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 10 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>{subskill}</div>
+                    <div style={{ display: "grid", gap: 6 }}>
+                      {questions.map((q, idx) => {
+                        const checked = miniAssessment.answers?.[subskill]?.includes(idx);
+                        return (
+                          <label key={idx} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                            <input
+                              type="checkbox"
+                              checked={!!checked}
+                              onChange={() => toggleAnswer(subskill, idx)}
+                            />
+                            <span style={{ fontSize: 13, color: "#0f172a" }}>{q}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
+                <button className="btn-cta ghost" onClick={() => setMiniAssessment(null)}>Batalkan</button>
+                <button className="btn-cta primary" onClick={submitMiniAssessment} disabled={assessmentLoading}>
+                  {assessmentLoading ? "Mengirim..." : "Kirim jawaban"}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
     </>

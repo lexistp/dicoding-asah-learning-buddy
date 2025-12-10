@@ -6,6 +6,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import EmbedChat from "./pages/EmbedChat";
 import HomePage from "./pages/HomePage";
+import LearningStrategyPage from "./pages/LearningStrategyPage";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
 import "./styles.css";
@@ -49,6 +50,7 @@ function AppShell() {
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/onboarding" element={<OnboardingPage />} />
+          <Route path="/learning-strategy" element={<LearningStrategyPage />} />
           <Route
             path="/chat"
             element={

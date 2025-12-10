@@ -15,9 +15,11 @@ from ..ml.course_recommender import CourseRecommender
 from ..ml.student_progress import HybridLearningRecommender
 from ..ml.roadmap_generator import RoadmapGenerator
 from ..ml.learning_strategy import LearningStrategyGenerator
+from ..routes.progress import build_progress_text
 import os
 
 import pandas as pd
+import random
 
 
 router = APIRouter(prefix="/ml-advanced", tags=["ml-advanced"])
@@ -402,7 +404,7 @@ class LearningStrategyReq(BaseModel):
 
 
 @router.post("/generate_learning_strategy")
-def api_generate_learning_strategy(req: LearningStrategyReq):
+def api_generate_learning_strategy(req: LearningStrategyReq, email: str = Depends(user_from_auth)):
     """
     Example Request:
     {
@@ -421,19 +423,59 @@ def api_generate_learning_strategy(req: LearningStrategyReq):
     """
     roadmap_gen = get_roadmap_generator()
     strategy_gen = get_strategy_generator()
+    # Profil pengguna dari onboarding
+    user_profile = None
+    progress_summary = None
+    try:
+        conn = get_conn()
+        rows = query(conn, "SELECT role,experience,goal FROM onboarding WHERE email=? ORDER BY id DESC LIMIT 1", (email,))
+        conn.close()
+        if rows:
+            r = rows[0]
+            role = r.get("role") or "-"
+            exp = r.get("experience") or "-"
+            goal_value = r.get("goal") or None
+            user_profile = f"Role: {role}, Experience: {exp}"
+            # jika goal di request kosong, gunakan goal dari onboarding
+            if not req.goal and goal_value:
+                req.goal = goal_value
+    except Exception:
+        pass
+    try:
+        progress_summary = build_progress_text(email)
+    except Exception:
+        progress_summary = None
     
     try:
         result = strategy_gen.generate_from_query(
             query=req.query,
             roadmap_generator=roadmap_gen,
             goal=req.goal,
-            top_n=req.top_n
+            top_n=req.top_n,
+            user_profile=user_profile,
+            progress_summary=progress_summary,
         )
         
         return sanitize_for_json(result)
     
     except Exception as e:
-        raise HTTPException(500, f"Strategy generation failed: {e}")
+        # Fallback lokal jika Gemini gagal atau API key invalid
+        import traceback
+        print("Strategy generation failed:", e)
+        print(traceback.format_exc())
+        try:
+            preds = roadmap_gen.predict_next_skills(req.query, top_n=req.top_n)
+            next_skills = [s.split("(")[0].strip() for s in preds["skill"].tolist()] if not preds.empty else []
+        except Exception:
+            next_skills = []
+
+        fallback = build_local_strategy(next_skills, goal=req.goal)
+        return sanitize_for_json({
+            "query": req.query,
+            "next_skills": next_skills,
+            "next_skills_details": preds.to_dict("records") if 'preds' in locals() and not preds.empty else [],
+            "strategy": fallback
+        })
 
 
 class DirectStrategyReq(BaseModel):
@@ -472,4 +514,52 @@ def api_generate_strategy_direct(req: DirectStrategyReq):
         return sanitize_for_json(response)
     
     except Exception as e:
-        raise HTTPException(500, f"Strategy generation failed: {e}")
+        # Fallback lokal jika Gemini gagal
+        fallback = build_local_strategy(req.next_skills, goal=req.goal)
+        return sanitize_for_json({
+            "next_skills": req.next_skills,
+            "goal": req.goal,
+            "strategy": fallback
+        })
+
+# ---------- Local Fallback Strategy (tanpa Gemini) ----------
+def build_local_strategy(next_skills: list[str], goal: str | None = None) -> str:
+    if not next_skills:
+        return "Maaf, belum bisa menemukan skill berikutnya. Coba ulangi dengan pertanyaan yang lebih spesifik."
+
+    title = f"Rencana belajar untuk: {', '.join(next_skills)}"
+    goal_line = f"Tujuan: {goal}" if goal else "Tujuan: tingkatkan skill web dev secara bertahap."
+
+    lines = [title, goal_line, "", "1️. Skill fokus:"]
+    for s in next_skills:
+        lines.append(f"  - {s}")
+
+    # Tips sederhana
+    tips_pool = [
+        "Pomodoro 25/5 saat latihan",
+        "Catat konsep penting, bukan hafalan",
+        "Kerjakan mini-proyek per skill",
+        "Refactor kode setelah selesai",
+        "Cari 1 sumber resmi + 1 tutorial",
+        "Debug pakai console.log/DevTools",
+        "Latihan 45-60 menit, break singkat",
+    ]
+    tips = random.sample(tips_pool, k=min(3, len(tips_pool)))
+    lines.append("")
+    lines.append("Tips singkat:")
+    for t in tips:
+        lines.append(f"- {t}")
+
+    # Jadwal 5 hari sederhana
+    schedule = []
+    for i, skill in enumerate(next_skills[:5], start=1):
+        dur = "60 menit" if i < 3 else "45 menit"
+        schedule.append(f"Hari {i}: {dur} → {skill}: praktik + 1 mini-task")
+    if not schedule:
+        schedule.append("Hari 1: 45 menit → Mulai eksplorasi materi dasar")
+
+    lines.append("")
+    lines.append("Jadwal singkat (rekomendasi 5 hari):")
+    lines.extend([f"- {row}" for row in schedule])
+
+    return "\n".join(lines)

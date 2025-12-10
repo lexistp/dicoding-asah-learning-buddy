@@ -79,17 +79,21 @@ class LearningStrategyGenerator:
     def generate_actionable_learning_strategy(
         self, 
         next_skills: List[str], 
-        goal: Optional[str] = None
+        goal: Optional[str] = None,
+        user_profile: Optional[str] = None,
+        progress_summary: Optional[str] = None,
     ) -> str:
         next_text = ", ".join(next_skills)
         level_nums = self._get_skill_level_nums(next_skills)
         level_num = min(level_nums) if level_nums else 1
         references_text = self._get_references_text(next_skills)
+        profile_text = f"\nProfil pengguna: {user_profile}" if user_profile else ""
+        progress_text = f"\nRingkasan progres: {progress_summary}" if progress_summary else ""
         
         # Build prompt 
         prompt = f"""
 Kamu adalah mentor belajar yang praktis dan terstruktur. Gunakan bahasa yang tidak terlalu baku, semangat, ramah, dan ceria.
-Buat strategi belajar harian untuk seseorang yang ingin mempelajari skill: {next_text} {f"dengan tujuan akhir: {goal}" if goal else ""}.
+Buat strategi belajar harian untuk seseorang yang ingin mempelajari skill: {next_text} {f"dengan tujuan akhir: {goal}" if goal else ""}.{profile_text}{progress_text}
 Berikan saran output subskill berdasarkan level skill yang sudah terdeteksi: {level_nums}.
 Format output harus persis seperti ini.
 Yuk naikin skill kamu! Ini rencana belajar yang bakal nge-boost perkembanganmu! ⚡
@@ -143,7 +147,9 @@ dst.
         query: str,
         roadmap_generator,
         goal: Optional[str] = None,
-        top_n: int = 5
+        top_n: int = 5,
+        user_profile: Optional[str] = None,
+        progress_summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Full pipeline: dari query → next skills → strategi
@@ -179,7 +185,12 @@ dst.
         ]
         
         # Generate strategy
-        strategy = self.generate_actionable_learning_strategy(next_skills, goal)
+        strategy = self.generate_actionable_learning_strategy(
+            next_skills,
+            goal,
+            user_profile=user_profile,
+            progress_summary=progress_summary,
+        )
         
         return {
             "query": query,

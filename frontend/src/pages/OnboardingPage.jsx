@@ -1,6 +1,8 @@
 import { Link, useNavigate } from "react-router-dom";
 import { useState, useMemo, useEffect } from "react";
 import { Backend } from "../lib/backend";
+import JobDetectionModal from "../components/JobDetectionModal";
+import JobConfirmModal from "../components/JobConfirmModal";
 
 const ROLE_SKILLS = {
   "Frontend Developer": ["HTML/CSS", "JavaScript", "React", "State Management", "Testing", "Accessibility", "Design System"],
@@ -25,6 +27,10 @@ export default function OnboardingPage() {
   const [customSkill, setCustomSkill] = useState("");
   const [scores, setScores] = useState({}); // subskill -> 0..100
   const [loadingML, setLoadingML] = useState(false);
+  const [detectOpen, setDetectOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [detectedRole, setDetectedRole] = useState("");
+  const [detectedSkills, setDetectedSkills] = useState([]);
   const baseSkills = useMemo(() => ROLE_SKILLS[role] || [], [role]);
   const subskills = useMemo(() => uniq([...baseSkills, ...analysis.map((a) => a.name), ...Object.keys(scores)]), [baseSkills, analysis, scores]);
 
@@ -84,6 +90,36 @@ export default function OnboardingPage() {
     }
   };
 
+  const detectJob = async (description) => {
+    setLoadingML(true);
+    try {
+      const res = await Backend.detectJobAndSkills(description, 6);
+      const job = res.job_role || "";
+      const skills = (res.skills || []).map((s) => s.skill || s) || [];
+      setDetectedRole(job);
+      setDetectedSkills(skills);
+      setRole(job || role);
+      // set default scores to 50 for detected skills
+      setScores((prev) => {
+        const updated = { ...prev };
+        skills.forEach((s) => { if (updated[s] == null) updated[s] = 50; });
+        return updated;
+      });
+      setConfirmOpen(true);
+    } catch (e) {
+      setAnalysisInfo("Deteksi gagal, coba lagi atau isi manual.");
+    } finally {
+      setLoadingML(false);
+    }
+  };
+
+  const startAssessment = async () => {
+    setConfirmOpen(false);
+    // generate assessment (placeholder, integrate if needed)
+    try { await Backend.generateAssessment(detectedSkills.length ? detectedSkills : subskills, 18); } catch {}
+    setStep(2);
+  };
+
   const addCustomSkill = () => {
     if (!customSkill.trim()) return;
     setScores((prev) => ({ ...prev, [customSkill.trim()]: prev[customSkill.trim()] ?? 0 }));
@@ -119,6 +155,7 @@ export default function OnboardingPage() {
                   <option key={r}>{r}</option>
                 ))}
               </select>
+              <button type="button" className="btn" style={{ marginTop: 8 }} onClick={() => setDetectOpen(true)}>Deteksi otomatis</button>
             </div>
             <div className="field">
               <label>Level pengalaman saat ini</label>
@@ -207,6 +244,22 @@ export default function OnboardingPage() {
           Sudah punya akun? <Link className="link" to="/login">Login</Link>
         </div>
       </form>
+
+      <JobDetectionModal
+        open={detectOpen}
+        onClose={() => setDetectOpen(false)}
+        onDetect={detectJob}
+        loading={loadingML}
+        detected={{ skills: detectedSkills }}
+      />
+      <JobConfirmModal
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        jobRole={detectedRole || role}
+        skills={detectedSkills}
+        onChangeDesc={() => { setConfirmOpen(false); setDetectOpen(true); }}
+        onStart={startAssessment}
+      />
     </div>
   );
 }

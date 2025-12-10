@@ -86,6 +86,30 @@ export const Backend = {
   recommendByQuery(query, limit = 6) {
     return jfetch("/ml/recommend_by_query", { method: "POST", body: JSON.stringify({ query, limit }) });
   },
+  recommendCoursesST({ user_input, user_level = null, top_k = 5 }) {
+    return jfetch("/ml-advanced/recommend_courses_st", {
+      method: "POST",
+      body: JSON.stringify({ user_input, user_level, top_k }),
+    });
+  },
+  predictNextSkills({ query, top_n = 5 }) {
+    return jfetch("/ml-advanced/predict_next_skills", {
+      method: "POST",
+      body: JSON.stringify({ query, top_n }),
+    });
+  },
+  detectJobAndSkills(description, top_k = 6) {
+    return jfetch("/ml-advanced/detect_job_and_skills", { method: "POST", body: JSON.stringify({ description, top_k }) });
+  },
+  generateAssessment(subskills, total_questions = 18) {
+    return jfetch("/ml-advanced/generate_assessment", { method: "POST", body: JSON.stringify({ subskills, total_questions }) });
+  },
+  submitAssessmentAdvanced(payload) {
+    return jfetch("/ml-advanced/submit_assessment", { method: "POST", body: JSON.stringify(payload) });
+  },
+  generateLearningStrategy({ query, goal = null, top_n = 5 }) {
+    return jfetch("/ml-advanced/generate_learning_strategy", { method: "POST", body: JSON.stringify({ query, goal, top_n }) });
+  },
 
   // Conversations
   createConversation(title) {
